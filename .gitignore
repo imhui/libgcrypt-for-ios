@@ -4,3 +4,5 @@ src
 include
 *.gz
 gcrypt.framework
+*.bz2
+

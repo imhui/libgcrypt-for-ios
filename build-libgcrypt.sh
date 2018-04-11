@@ -21,7 +21,7 @@
 ###########################################################################
 #  Change values here
 #
-VERSION="1.5.3"
+VERSION="1.8.2"
 #
 ###########################################################################
 #
@@ -31,13 +31,15 @@ CURRENTPATH=`pwd`
 ARCHS="x86_64 i386 armv7 armv7s arm64"
 DEVELOPER=`xcode-select -print-path`
 FWNAME="gcrypt"
+OPT_FLAGS="-Os -g3"
+MAKE_JOBS=16
 ##########
 set -e
-if [ ! -e libgcrypt-${VERSION}.tar.gz ]; then
-	echo "Downloading libgcrypt-${VERSION}.tar.gz"
-    curl -O ftp://ftp.gnupg.org/gcrypt/libgcrypt/libgcrypt-${VERSION}.tar.gz
+if [ ! -e libgcrypt-${VERSION}.tar.bz2 ]; then
+	echo "Downloading libgcrypt-${VERSION}.tar.bz2"
+    curl -O https://www.gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-${VERSION}.tar.bz2
 else
-	echo "Using libgcrypt-${VERSION}.tar.gz"
+	echo "Using libgcrypt-${VERSION}.tar.bz2"
 fi
 
 if [ -f ${CURRENTPATH}/bin/iPhoneSimulator${SDKVERSION}-i386.sdk/lib/libgpg-error.a ];
@@ -57,61 +59,69 @@ do
 	if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]];
 	then
 		PLATFORM="iPhoneSimulator"
+		SDK="iphonesimulator"
 	else
 		PLATFORM="iPhoneOS"
+		SDK="iphoneos"
 	fi
 	echo "Building libgcrypt for ${PLATFORM} ${SDKVERSION} ${ARCH}"
 	echo "Please stand by..."
-	tar zxf libgcrypt-${VERSION}.tar.gz -C src
+	if [[ ! -f ${CURRENTPATH}/src/libgcrypt-${VERSION}/configure ]]; 
+		then
+		echo 'extract source code'
+		tar zxf libgcrypt-${VERSION}.tar.bz2 -C src
+		yes | cp -rf ${CURRENTPATH}/inject/libgcrypt/tests/random.c ${CURRENTPATH}/src/libgcrypt-${VERSION}/tests/random.c
+	fi
+	
 	cd src/libgcrypt-${VERSION}
 	
 	mkdir -p "${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
-	LOG="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk/build-libgcrypt-${VERSION}.log"
 
-	echo "Patching libgcrypt to compile with iOS-SDK..."
-	echo "@see http://www.telesphoreo.org/browser/trunk/data/gcrypt/armasm.diff"
-	PATCHFILE=`find ../.. | grep "armasm.diff"`
-	echo "Using: ${PATCHFILE}"
-	patch -p0 < $PATCHFILE >> "${LOG}" 2>&1
-	echo "Patching done."
-
-	export DEVROOT="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
-	export SDKROOT="${DEVROOT}/SDKs/${PLATFORM}${SDKVERSION}.sdk"
-	export CC=${DEVELOPER}/usr/bin/gcc
-	export LD=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld
-	export CXX=${DEVELOPER}/usr/bin/g++
-	export AR=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar
-	export AS=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/as
-	export NM=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm
-	export RANLIB=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib
-	export LDFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${SDKROOT} -L${CURRENTPATH}/lib -miphoneos-version-min=7.0 -fheinous-gnu-extensions"
-	export CFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${SDKROOT} -I${CURRENTPATH}/include -miphoneos-version-min=7.0 -fheinous-gnu-extensions"
-	export CPPFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${SDKROOT} -I${CURRENTPATH}/include -miphoneos-version-min=7.0 -fheinous-gnu-extensions"
-	export CXXFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${SDKROOT} -I${CURRENTPATH}/include -miphoneos-version-min=7.0 -fheinous-gnu-extensions"
-	
 	HOST="${ARCH}"
-	if [ "${ARCH}" == "arm64" ];
+	if [[ "${ARCH}" == "armv7" || "${ARCH}" == "armv7s" ]];
+	then
+		HOST="arm"
+	elif [[ "${ARCH}" == "arm64" ]]; 
 	then
 		HOST="aarch64"
 	fi
 
-	
+	ARCH_FLAGS="-arch ${ARCH}"
+	HOST_FLAGS="${ARCH_FLAGS} -miphoneos-version-min=8.0 -isysroot $(xcrun -sdk ${SDK} --show-sdk-path)"
+	CHOST="${HOST}-apple-darwin"
+
+	PREFIX="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
+	mkdir -p ${PREFIX}
+
+	export CC="$(xcrun -find -sdk ${SDK} cc)"
+    export CXX="$(xcrun -find -sdk ${SDK} g++)"
+    export CPP="$(xcrun -find -sdk ${SDK} cpp)"
+    export CFLAGS="${HOST_FLAGS} ${OPT_FLAGS}"
+    export CXXFLAGS="${HOST_FLAGS} ${OPT_FLAGS}"
+    export LDFLAGS="${HOST_FLAGS}"
+
+	# make distclean
+
 	if [ "${ARCH}" == "i386" ];
 	then
-		./configure --host=${HOST}-apple-darwin --prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" --disable-shared --enable-static --with-gpg-error-prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" --disable-aesni-support >> "${LOG}" 2>&1
+		./configure --host=${CHOST} --prefix=${PREFIX} --enable-static --disable-shared --disable-aesni-support --with-gpg-error-prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
 	elif [ "${ARCH}" == "x86_64" ];
 	then
-			./configure --host=${HOST}-apple-darwin --prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" --disable-shared --enable-static --with-gpg-error-prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" --disable-aesni-support --disable-asm >> "${LOG}" 2>&1
+		./configure --host=${CHOST} --prefix=${PREFIX} --enable-static --disable-shared --disable-asm --disable-aesni-support --with-gpg-error-prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
 	else
-		./configure --host=${HOST}-apple-darwin --prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" --disable-shared --enable-static --with-gpg-error-prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" >> "${LOG}" 2>&1
+		./configure --host=${CHOST} --prefix=${PREFIX} --enable-static --disable-shared --disable-asm --with-gpg-error-prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
 	fi
 
-	make >> "${LOG}" 2>&1
-	make install >> "${LOG}" 2>&1
+    make clean
+    make -j${MAKE_JOBS} 
+    make install 
+    make distclean
+
 	cd ${CURRENTPATH}
-	rm -rf src/libgcrypt-${VERSION}
-	
+
 done
+
+rm -rf src/libgcrypt-${VERSION}
 
 echo "Build library..."
 lipo -create ${CURRENTPATH}/bin/iPhoneSimulator${SDKVERSION}-i386.sdk/lib/libgcrypt.a ${CURRENTPATH}/bin/iPhoneSimulator${SDKVERSION}-x86_64.sdk/lib/libgcrypt.a ${CURRENTPATH}/bin/iPhoneOS${SDKVERSION}-armv7.sdk/lib/libgcrypt.a ${CURRENTPATH}/bin/iPhoneOS${SDKVERSION}-armv7s.sdk/lib/libgcrypt.a ${CURRENTPATH}/bin/iPhoneOS${SDKVERSION}-arm64.sdk/lib/libgcrypt.a -output ${CURRENTPATH}/lib/libgcrypt.a

@@ -21,7 +21,7 @@
 ###########################################################################
 #  Change values here
 #
-VERSION="1.12"
+VERSION="1.28"
 #
 ###########################################################################
 #
@@ -30,12 +30,14 @@ SDKVERSION=`xcrun -sdk iphoneos --show-sdk-version`
 CURRENTPATH=`pwd`
 ARCHS="i386 x86_64 armv7 armv7s arm64"
 DEVELOPER=`xcode-select -print-path`
+OPT_FLAGS="-Os -g3"
+MAKE_JOBS=16
 
 ##########
 set -e
-if [ ! -e libgpg-error-${VERSION}.tar.gz ]; then
+if [ ! -e libgpg-error-${VERSION}.tar.bz2 ]; then
 	echo "Downloading libgpg-error-${VERSION}.tar.gz"
-    curl -O ftp://ftp.gnupg.org/gcrypt/libgpg-error/libgpg-error-${VERSION}.tar.gz
+    curl -O https://www.gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-${VERSION}.tar.bz2
 else
 	echo "Using libgpg-error-${VERSION}.tar.gz"
 fi
@@ -49,45 +51,51 @@ do
 	if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]];
 	then
 		PLATFORM="iPhoneSimulator"
+		SDK="iphonesimulator"
 	else
 		PLATFORM="iPhoneOS"
+		SDK="iphoneos"
 	fi
+
 	echo "Building libgpg-error for ${PLATFORM} ${SDKVERSION} ${ARCH}"
 	echo "Please stand by..."
-	tar zxf libgpg-error-${VERSION}.tar.gz -C src
+	tar xjf libgpg-error-${VERSION}.tar.bz2 -C src
 	cd src/libgpg-error-${VERSION}
 
-	export BUILD_DEVROOT="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
-	export BUILD_SDKROOT="${BUILD_DEVROOT}/SDKs/${PLATFORM}${SDKVERSION}.sdk"
-	export LD=${BUILD_DEVROOT}/usr/bin/ld
-	export CC=${DEVELOPER}/usr/bin/gcc
-	export CXX=${DEVELOPER}/usr/bin/g++
-	export AR=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/ar
-	export AS=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/as
-	export NM=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm
-	export RANLIB=${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib
-	export LDFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${BUILD_SDKROOT} -L${CURRENTPATH}/lib -miphoneos-version-min=7.0"
-	export CFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${BUILD_SDKROOT} -I${CURRENTPATH}/include -miphoneos-version-min=7.0"
-	export CXXFLAGS="-arch ${ARCH} -pipe -no-cpp-precomp -isysroot ${BUILD_SDKROOT} -I${CURRENTPATH}/include -miphoneos-version-min=7.0"
-
-	mkdir -p "${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
-
-	LOG="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk/build-libgpg-error-${VERSION}.log"
-	
-	HOST=${ARCH}
-	if [ "${ARCH}" == "arm64" ];
+	HOST="${ARCH}"
+	if [[ "${ARCH}" == "armv7" || "${ARCH}" == "armv7s" ]];
+	then
+		HOST="arm"
+	elif [[ "${ARCH}" == "arm64" ]]; 
 	then
 		HOST="aarch64"
 	fi
 	
-	./configure --host=${HOST}-apple-darwin --prefix="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" --disable-shared --enable-static >> "${LOG}" 2>&1
+	ARCH_FLAGS="-arch ${ARCH}"
+	HOST_FLAGS="${ARCH_FLAGS} -miphoneos-version-min=8.0 -isysroot $(xcrun -sdk ${SDK} --show-sdk-path)"
+	CHOST="${HOST}-apple-darwin"
 
-	make >> "${LOG}" 2>&1
-	make install >> "${LOG}" 2>&1
+	PREFIX="${CURRENTPATH}/bin/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
+	mkdir -p ${PREFIX}
+
+	export CC="$(xcrun -find -sdk ${SDK} cc)"
+    export CXX="$(xcrun -find -sdk ${SDK} g++)"
+    export CPP="$(xcrun -find -sdk ${SDK} cpp)"
+    export CFLAGS="${HOST_FLAGS} ${OPT_FLAGS}"
+    export CXXFLAGS="${HOST_FLAGS} ${OPT_FLAGS}"
+    export LDFLAGS="${HOST_FLAGS}"
+
+    ./configure --host=${CHOST} --prefix=${PREFIX} --enable-static --disable-shared
+
+    make clean
+    make -j${MAKE_JOBS}
+    make install
+
 	cd ${CURRENTPATH}
 	rm -rf src/libgpg-error-${VERSION}
 	
 done
+
 
 echo "Build library..."
 lipo -create ${CURRENTPATH}/bin/iPhoneSimulator${SDKVERSION}-i386.sdk/lib/libgpg-error.a ${CURRENTPATH}/bin/iPhoneSimulator${SDKVERSION}-x86_64.sdk/lib/libgpg-error.a ${CURRENTPATH}/bin/iPhoneOS${SDKVERSION}-armv7.sdk/lib/libgpg-error.a ${CURRENTPATH}/bin/iPhoneOS${SDKVERSION}-armv7s.sdk/lib/libgpg-error.a ${CURRENTPATH}/bin/iPhoneOS${SDKVERSION}-arm64.sdk/lib/libgpg-error.a  -output ${CURRENTPATH}/lib/libgpg-error.a
